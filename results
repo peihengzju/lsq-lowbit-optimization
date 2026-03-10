@@ -1,0 +1,79 @@
+# Experiment Results
+
+Date: 2026-03-06
+Env: torch 2.2.2 (cu121), CUDA toolkit 12.1, gcc-12, custom CUDA extension built
+Checkpoint: local LSQ 4-bit checkpoint (path omitted for portability)
+
+## A) Synthetic GEMM Benchmark
+Command:
+python benchmarks/benchmark_inference.py --m 1024 --n 1024 --k 1024 --iters 200 --check
+
+Result:
+- Shape: A[1024,1024] x B[1024,1024]^T
+- FP16 torch.matmul: 0.093 ms
+- INT8 custom GEMM: 0.826 ms
+- INT4 storage + INT8 GEMM: 0.802 ms
+- INT8 correctness: True
+- INT4 correctness: True
+
+Interpretation:
+- This test measures kernel-level behavior using synthetic random matrices.
+- It isolates operator performance and correctness from model architecture effects.
+- In this run, INT4-storage + INT8-compute is slightly faster than INT8 GEMM (0.802 ms vs 0.826 ms), and both correctness checks pass.
+
+## B) LSQ Layer Benchmark (module=fc)
+Config:
+- --w-bits 4 --a-bits 4 --disable-first-last-8bit
+- --lsq-root /path/to/LSQ
+- --ckpt /path/to/checkpoint.pth
+
+Interpretation:
+- This benchmark loads an LSQ checkpoint and evaluates only the `fc` layer.
+- It compares three paths: FP16 Linear baseline, native LSQ QuantLinear, and INT4-storage + INT8-compute.
+- The goal is to verify end-to-end layer-level speedup against the native LSQ inference path.
+
+### Batch = 256
+Command:
+python benchmarks/benchmark_lsq_fc.py --lsq-root /path/to/LSQ --ckpt /path/to/checkpoint.pth --module-name fc --w-bits 4 --a-bits 4 --disable-first-last-8bit --batch-size 256 --warmup 50 --iters 200
+
+Result:
+- Module: fc, input=[256, 512]
+- FP16 Linear: 0.039 ms
+- LSQ QuantLinear (dequant): 0.462 ms
+- INT4 storage + INT8 compute: 0.203 ms
+- Speedup vs LSQ: 2.28x (0.462 / 0.203)
+- max_abs_err(vs LSQ QuantLinear): 4.222132
+
+### Batch = 1
+Command:
+python benchmarks/benchmark_lsq_fc.py --lsq-root /path/to/LSQ --ckpt /path/to/checkpoint.pth --module-name fc --w-bits 4 --a-bits 4 --disable-first-last-8bit --batch-size 1 --warmup 50 --iters 200
+
+Result:
+- Module: fc, input=[1, 512]
+- FP16 Linear: 0.033 ms
+- LSQ QuantLinear (dequant): 0.449 ms
+- INT4 storage + INT8 compute: 0.201 ms
+- Speedup vs LSQ: 2.23x (0.449 / 0.201)
+- max_abs_err(vs LSQ QuantLinear): 2.704684
+
+### Batch = 32
+Command:
+python benchmarks/benchmark_lsq_fc.py --lsq-root /path/to/LSQ --ckpt /path/to/checkpoint.pth --module-name fc --w-bits 4 --a-bits 4 --disable-first-last-8bit --batch-size 32 --warmup 50 --iters 200
+
+Result:
+- Module: fc, input=[32, 512]
+- FP16 Linear: 0.044 ms
+- LSQ QuantLinear (dequant): 0.469 ms
+- INT4 storage + INT8 compute: 0.227 ms
+- Speedup vs LSQ: 2.07x (0.469 / 0.227)
+- max_abs_err(vs LSQ QuantLinear): 3.604327
+
+Interpretation:
+- This sweep changes only batch size for the same layer and checkpoint.
+- It validates whether the speedup trend is stable across different workloads.
+- All tested batch sizes show consistent acceleration over native LSQ (~2.07x to ~2.28x).
+
+## Quick Summary
+- Synthetic kernel benchmark correctness passed.
+- On LSQ fc layer, INT4 storage + INT8 compute achieved ~2.1x-2.3x speedup vs native LSQ QuantLinear path in tested batches.
+- Numerical gap still exists (max_abs_err ~2.7 to 4.2), needs further quantization-path alignment analysis.
