@@ -34,9 +34,9 @@ def build_extensions():
 README = Path(__file__).resolve().parent / "README.md"
 
 setup(
-    name="lsq-lowbit-optimization",
+    name="int4-cuda-inference-backend",
     version="0.1.0",
-    description="LSQ-centered low-bit optimization pipeline for PyTorch",
+    description="Custom INT4 CUDA inference backend for quantized CNNs in PyTorch",
     long_description=README.read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     packages=find_packages(exclude=("tests", "benchmarks")),

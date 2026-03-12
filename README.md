@@ -1,16 +1,16 @@
-# LSQ Low-Bit CUDA Optimization
+# Custom INT4 CUDA Inference Backend for Quantized CNNs
 
-Profiling-driven CUDA optimization project built on top of an LSQ ImageNet reproduction.
+Profiling-driven low-bit inference project built with PyTorch C++/CUDA extensions.
 
-This repository focuses on a practical systems question: after training a low-bit LSQ model, what is required to turn that model into a hardware-aware inference path rather than just a quantized model evaluated through standard PyTorch execution?
+This repository focuses on a practical systems question: after training a quantized CNN, what is required to turn that model into a hardware-aware inference path rather than just a quantized model evaluated through standard PyTorch execution?
 
 ## Project Summary
 
-This project started from an LSQ reproduction on ImageNet and then extended into custom CUDA work for low-bit inference:
+The current implementation is built around LSQ-trained ImageNet checkpoints and extends them into a custom low-bit CUDA inference path:
 
 - INT4 packed weight storage
 - INT8 compute path based on custom PyTorch CUDA extensions
-- LSQ checkpoint adapter for converting quantized layers into custom operators
+- checkpoint adapter for converting LSQ quantized layers into custom operators
 - full-model ImageNet evaluation for native LSQ vs converted execution
 - fixed-batch profiling workflow for identifying real runtime bottlenecks
 
@@ -34,7 +34,7 @@ This repository is an attempt to bridge that gap by moving the bottlenecks into 
 
 - Built a custom PyTorch CUDA extension for low-bit inference
 - Implemented INT4 packed weights with on-the-fly unpacking
-- Implemented INT4-storage / INT8-compute GEMM
+- Implemented INT4-weight / INT8-activation GEMM and fused execution paths
 - Added specialized fused paths for dominant convolution cases
 - Integrated external LSQ checkpoints into a custom inference backend
 - Added full-model ImageNet evaluation and fixed-batch profiling scripts
@@ -66,7 +66,7 @@ Takeaway:
 - the converted path preserves full-model accuracy
 - the retained CUDA work materially reduces runtime relative to the initial converted implementation
 - the project still does not beat native cuDNN-backed execution end to end
-- profiling shows that the remaining gap is primarily a systems problem, not an LSQ accuracy problem
+- profiling shows that the remaining gap is primarily a systems problem, not a quantization-accuracy problem
 
 ## What Is Implemented
 
@@ -75,7 +75,7 @@ Implemented and retained:
 - LSQ checkpoint loading and reconstruction
 - conversion of eligible middle quantized layers into custom operators
 - packed INT4 weight path
-- custom INT4/INT8 GEMM
+- custom INT4-weight / INT8-activation GEMM
 - specialized `3x3, stride=1, padding=1` path
 - specialized `1x1` path
 - fused low-bit linear path
@@ -89,6 +89,23 @@ Not implemented as a final production solution:
 - implicit-GEMM-style final convolution backend
 - best-possible kernel tuning comparable to cuDNN or production inference libraries
 
+## Scope
+
+This repository should be viewed as a systems prototype for quantized CNN inference rather than a general-purpose deployment framework.
+
+What is general in the current codebase:
+
+- INT4 packed weight storage
+- custom CUDA kernels and PyTorch extension bindings
+- fused low-bit linear and selected convolution paths
+- profiler-driven workflow for identifying end-to-end bottlenecks
+
+What is still LSQ-specific in the current codebase:
+
+- checkpoint import and model reconstruction flow
+- evaluation scripts and naming
+- current end-to-end validation on LSQ-trained PreAct-ResNet18/ImageNet
+
 ## Repository Layout
 
 - [`csrc/int4_int8_kernels.cu`](/home/yph3738/projects/cuda_optimization/csrc/int4_int8_kernels.cu): CUDA kernels
@@ -96,7 +113,7 @@ Not implemented as a final production solution:
 - [`quant_pipeline/ops/int4_int8_gemm.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_int8_gemm.py): Python wrappers for custom CUDA ops
 - [`quant_pipeline/ops/int4_conv2d.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_conv2d.py): custom low-bit convolution module
 - [`quant_pipeline/ops/int4_linear.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_linear.py): custom low-bit linear module
-- [`quant_pipeline/integration/lsq_adapter.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/integration/lsq_adapter.py): LSQ model conversion utilities
+- [`quant_pipeline/integration/lsq_adapter.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/integration/lsq_adapter.py): LSQ checkpoint import and conversion utilities
 - [`benchmarks/benchmark_inference.py`](/home/yph3738/projects/cuda_optimization/benchmarks/benchmark_inference.py): synthetic GEMM benchmark
 - [`benchmarks/benchmark_lsq_fc.py`](/home/yph3738/projects/cuda_optimization/benchmarks/benchmark_lsq_fc.py): LSQ layer benchmark
 - [`scripts/eval_lsq_imagenet.py`](/home/yph3738/projects/cuda_optimization/scripts/eval_lsq_imagenet.py): full-model ImageNet evaluation
@@ -219,14 +236,14 @@ python benchmarks/benchmark_lsq_fc.py \
 
 The repository is intended to document a complete technical thread rather than a single result:
 
-- reproducing an LSQ quantization baseline on ImageNet
-- integrating external training artifacts into a custom inference backend
+- integrating external quantized checkpoints into a custom inference backend
 - implementing PyTorch C++/CUDA extensions for low-bit execution
 - using profiling to identify the dominant runtime bottlenecks
 - iterating on lowering and kernel design based on measured behavior
+- validating that low-bit accuracy can be retained after operator conversion
 - retaining unsuccessful directions when they help clarify the remaining gap to native execution
 
-In that sense, the value of the project is not limited to the final numbers. It also captures the engineering process required to move from a quantized model to a more hardware-aware execution path.
+In that sense, the value of the project is not limited to the final numbers. It captures the engineering process required to move from a quantized checkpoint to a more hardware-aware execution path.
 
 ## References in This Repo
 
