@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+environment_export.md
 
 # CUDA and benchmark artifacts
 *.o
@@ -18,3 +19,17 @@ dist/
 *.bin
 *.safetensors
 checkpoints/
+
+# LaTeX intermediate files under docs/reports
+docs/reports/*.aux
+docs/reports/*.log
+docs/reports/*.out
+docs/reports/*.toc
+docs/reports/*.fls
+docs/reports/*.fdb_latexmk
+docs/reports/*.synctex.gz
+
+# Generated experiment outputs
+artifacts/benchmarks/
+artifacts/evals/
+artifacts/profiles/

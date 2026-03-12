@@ -1,53 +1,122 @@
-# lsq-lowbit-optimization
+# LSQ Low-Bit CUDA Optimization
 
-LSQ-centered low-bit optimization project for PyTorch, with a continuous roadmap from hardware-aware inference optimization to training-time optimization.
+Profiling-driven CUDA optimization project built on top of an LSQ ImageNet reproduction.
 
-## Scope
+This repository focuses on a practical systems question: after training a low-bit LSQ model, what is required to turn that model into a hardware-aware inference path rather than just a quantized model evaluated through standard PyTorch execution?
 
-Current focus (implemented):
-- INT4 weight storage (packed `uint8`, 2 values per byte)
-- INT4 on-the-fly unpack in CUDA
-- INT8 x INT8 -> INT32 GEMM path with `dp4a`
-- Layer-level comparison against native LSQ `QuantLinear`
+## Project Summary
 
-Planned next phase:
-- Training-side low-bit optimization built on the same LSQ pipeline
-- Better train/infer consistency for scale handling and quantization behavior
+This project started from an LSQ reproduction on ImageNet and then extended into custom CUDA work for low-bit inference:
 
-## Why this project
+- INT4 packed weight storage
+- INT8 compute path based on custom PyTorch CUDA extensions
+- LSQ checkpoint adapter for converting quantized layers into custom operators
+- full-model ImageNet evaluation for native LSQ vs converted execution
+- fixed-batch profiling workflow for identifying real runtime bottlenecks
 
-- Keep one continuous research/engineering thread: LSQ training artifacts -> low-bit deployment path.
-- Bridge algorithm and systems work: quantization-aware representation + CUDA kernel implementation.
-- Provide reproducible scripts for benchmark and integration validation.
+The emphasis is not only on numerical correctness, but on analyzing why low-bit models are often still slower than native execution and then reducing that gap with targeted kernel and lowering optimizations.
 
-## Resume-Friendly Highlights
+## Why This Project Matters
 
-- Built a custom PyTorch CUDA extension for INT4-storage/INT8-compute inference.
-- Implemented packed INT4 handling and fused low-bit GEMM kernel path.
-- Integrated external LSQ checkpoints into a hardware-aware inference pipeline.
-- Added benchmark flows for synthetic GEMM and LSQ module-level latency/error comparison.
+Low-bit quantization does not automatically imply low-bit efficiency.
 
-## Repository Structure
+In practice, quantized models are often bottlenecked by:
 
-- `csrc/int4_int8_kernels.cu`: CUDA kernels (`int8_int8_gemm`, `int4_int8_gemm`)
-- `csrc/int4_int8_ext.cpp`: PyTorch C++ extension bindings
-- `quant_pipeline/quantization/int4_pack.py`: INT4 pack/unpack utilities
-- `quant_pipeline/ops/int4_int8_gemm.py`: Python wrapper for custom op
-- `quant_pipeline/ops/int4_linear.py`: `Int4WeightInt8ActLinear`
-- `quant_pipeline/integration/lsq_adapter.py`: LSQ model conversion utilities
-- `benchmarks/benchmark_inference.py`: synthetic GEMM benchmark
-- `benchmarks/benchmark_lsq_fc.py`: LSQ layer benchmark
+- explicit lowering (`im2col` / `unfold`)
+- temporary tensor allocation
+- dtype conversion
+- repeated quantize/dequantize work
+- fragmented CUDA kernel launches
+
+This repository is an attempt to bridge that gap by moving the bottlenecks into custom CUDA code rather than stopping at algorithm-level quantization.
+
+## Key Technical Work
+
+- Built a custom PyTorch CUDA extension for low-bit inference
+- Implemented INT4 packed weights with on-the-fly unpacking
+- Implemented INT4-storage / INT8-compute GEMM
+- Added specialized fused paths for dominant convolution cases
+- Integrated external LSQ checkpoints into a custom inference backend
+- Added full-model ImageNet evaluation and fixed-batch profiling scripts
+- Used profiler output to drive successive kernel/lowering revisions
+
+## Current Best Retained Results
+
+The table below reflects the retained optimization path. A later `full-cover` experiment that converted `conv1` and `fc` was evaluated and then rolled back because it regressed runtime; it is intentionally excluded from the main results here.
+
+| Configuration | Top-1 | Top-5 | Time |
+|---|---:|---:|---:|
+| FP native | 69.78 | 89.11 | 56.2s |
+| LSQ native | 68.69 | 88.30 | 58.4s |
+| Early converted LSQ | 68.75 | 88.38 | 148.5s |
+| Best retained converted LSQ | 68.76 | 88.38 | 107.9s |
+
+Fixed-batch converted profiling progression:
+
+| Stage | Wall Time |
+|---|---:|
+| Initial converted path | 15.44s |
+| After fused `3x3` lowering | 9.62s |
+| After removing host sync / padding overhead | 8.46s |
+| After fused `3x3` conv path | 8.22s |
+| Current retained converted profile (`fusedconv_v2`) | 8.15s |
+
+Takeaway:
+
+- the converted path preserves full-model accuracy
+- the retained CUDA work materially reduces runtime relative to the initial converted implementation
+- the project still does not beat native cuDNN-backed execution end to end
+- profiling shows that the remaining gap is primarily a systems problem, not an LSQ accuracy problem
+
+## What Is Implemented
+
+Implemented and retained:
+
+- LSQ checkpoint loading and reconstruction
+- conversion of eligible middle quantized layers into custom operators
+- packed INT4 weight path
+- custom INT4/INT8 GEMM
+- specialized `3x3, stride=1, padding=1` path
+- specialized `1x1` path
+- fused low-bit linear path
+- ImageNet evaluation scripts
+- profiler-driven analysis workflow
+
+Not implemented as a final production solution:
+
+- training inside this repository
+- end-to-end integer activation pipeline across the whole model
+- implicit-GEMM-style final convolution backend
+- best-possible kernel tuning comparable to cuDNN or production inference libraries
+
+## Repository Layout
+
+- [`csrc/int4_int8_kernels.cu`](/home/yph3738/projects/cuda_optimization/csrc/int4_int8_kernels.cu): CUDA kernels
+- [`csrc/int4_int8_ext.cpp`](/home/yph3738/projects/cuda_optimization/csrc/int4_int8_ext.cpp): PyTorch extension bindings
+- [`quant_pipeline/ops/int4_int8_gemm.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_int8_gemm.py): Python wrappers for custom CUDA ops
+- [`quant_pipeline/ops/int4_conv2d.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_conv2d.py): custom low-bit convolution module
+- [`quant_pipeline/ops/int4_linear.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_linear.py): custom low-bit linear module
+- [`quant_pipeline/integration/lsq_adapter.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/integration/lsq_adapter.py): LSQ model conversion utilities
+- [`benchmarks/benchmark_inference.py`](/home/yph3738/projects/cuda_optimization/benchmarks/benchmark_inference.py): synthetic GEMM benchmark
+- [`benchmarks/benchmark_lsq_fc.py`](/home/yph3738/projects/cuda_optimization/benchmarks/benchmark_lsq_fc.py): LSQ layer benchmark
+- [`scripts/eval_lsq_imagenet.py`](/home/yph3738/projects/cuda_optimization/scripts/eval_lsq_imagenet.py): full-model ImageNet evaluation
+- [`scripts/profile_lsq_inference.py`](/home/yph3738/projects/cuda_optimization/scripts/profile_lsq_inference.py): fixed-batch inference profiling
+- [`artifacts/evals/`](/home/yph3738/projects/cuda_optimization/artifacts/evals): saved evaluation outputs
+- [`artifacts/profiles/`](/home/yph3738/projects/cuda_optimization/artifacts/profiles): saved profiling outputs
+- [`docs/reports/`](/home/yph3738/projects/cuda_optimization/docs/reports): report sources and generated PDFs
 
 ## Environment
 
 Validated setup:
-- `torch==2.2.2` (CUDA 12.1 build)
-- CUDA Toolkit `12.1`
-- `gcc/g++ 12`
 
-CUDA toolkit and PyTorch CUDA runtime versions must match.
+- Python 3.12
+- `torch==2.2.2` with CUDA 12.1
+- CUDA Toolkit 12.1
+- `gcc-12` / `g++-12`
 
-## Quick Start
+The CUDA toolkit version must match the PyTorch CUDA build.
+
+## Setup
 
 ```bash
 python -m venv .venv
@@ -55,7 +124,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Build extension (explicit toolchain recommended):
+Build the extension:
 
 ```bash
 CUDA_HOME=/usr/local/cuda-12.1 \
@@ -70,75 +139,98 @@ pip install -e . --no-build-isolation --force-reinstall
 Sanity check:
 
 ```bash
-python -c "import int4_int8_ext; print('extension ok')"
+python -c "import torch; import int4_int8_ext; print('extension ok')"
 ```
 
-## Benchmarks
+## Reproducing the Main Experiments
 
-Synthetic GEMM:
+### 1. FP Native Evaluation
 
 ```bash
-python benchmarks/benchmark_inference.py \
-  --m 1024 --n 1024 --k 1024 --iters 200 --check
+python scripts/eval_lsq_imagenet.py \
+  --lsq-root /path/to/LSQ \
+  --ckpt /path/to/fp_checkpoint.pth \
+  --data-root /path/to/imagenet \
+  --mode native
 ```
 
-LSQ layer benchmark (bring your own LSQ repo/checkpoint):
+### 2. LSQ Native vs Converted Evaluation
+
+```bash
+python scripts/eval_lsq_imagenet.py \
+  --lsq-root /path/to/LSQ \
+  --ckpt /path/to/lsq_checkpoint.pth \
+  --data-root /path/to/imagenet \
+  --mode both \
+  --convert-linear \
+  --convert-conv
+```
+
+### 3. Fixed-Batch Profiling
+
+```bash
+python scripts/profile_lsq_inference.py \
+  --lsq-root /path/to/LSQ \
+  --ckpt /path/to/lsq_checkpoint.pth \
+  --data-root /path/to/imagenet \
+  --mode converted \
+  --convert-linear \
+  --convert-conv \
+  --batch-size 64 \
+  --warmup-batches 5 \
+  --active-batches 20 \
+  --topk 25 \
+  --reuse-single-batch
+```
+
+### 4. LSQ Layer Benchmark
 
 ```bash
 python benchmarks/benchmark_lsq_fc.py \
   --lsq-root /path/to/LSQ \
-  --ckpt /path/to/checkpoint.pth \
+  --ckpt /path/to/lsq_checkpoint.pth \
   --module-name fc \
-  --w-bits 4 --a-bits 4 --disable-first-last-8bit \
-  --batch-size 256 --warmup 50 --iters 200
+  --w-bits 4 \
+  --a-bits 4 \
+  --disable-first-last-8bit \
+  --input-mode model-features \
+  --data-root /path/to/imagenet \
+  --batch-size 256 \
+  --warmup 50 \
+  --iters 200
 ```
 
-Outputs include latency comparison and numerical error metrics (for example `max_abs_err` vs LSQ baseline layer output).
+## Important Notes
 
-## Benchmark Results
+- This repository does not distribute pretrained checkpoints.
+- LSQ training is maintained in the external LSQ repository used by the experiments.
+- The best retained performance path in this repository intentionally keeps `conv1` and `fc` on the native path because the attempted full-coverage conversion regressed runtime.
+- The current implementation should be viewed as a systems prototype, not as a production-ready low-bit inference framework.
 
-Measured on 2026-03-06 with `torch 2.2.2+cu121`, CUDA toolkit 12.1, and gcc-12.
+## Known Limitations
 
-Synthetic GEMM (`m=n=k=1024`, 200 iterations):
-- FP16 `torch.matmul`: `0.093 ms`
-- INT8 custom GEMM: `0.826 ms`
-- INT4 storage + INT8 compute GEMM: `0.802 ms`
-- Correctness: INT8=`True`, INT4=`True`
+- end-to-end runtime is still slower than native cuDNN-backed inference
+- the best-performing retained path converts 19 layers rather than all 21 quantized layers
+- residual front-end quantization work still exists
+- the current convolution backend is specialized but not yet equivalent to a mature implicit-GEMM or production fused-convolution implementation
+- profile-level memory traffic is still higher than native LSQ
 
-LSQ `fc` layer benchmark (`w_bits=4`, `a_bits=4`, `--disable-first-last-8bit`):
-- Batch 256: LSQ `0.462 ms` vs INT4+INT8 `0.203 ms` (`2.28x` speedup), `max_abs_err=4.222132`
-- Batch 32: LSQ `0.469 ms` vs INT4+INT8 `0.227 ms` (`2.07x` speedup), `max_abs_err=3.604327`
-- Batch 1: LSQ `0.449 ms` vs INT4+INT8 `0.201 ms` (`2.23x` speedup), `max_abs_err=2.704684`
+## What This Repository Demonstrates
 
-## Model and Checkpoint Policy
+The repository is intended to document a complete technical thread rather than a single result:
 
-- Model weights/checkpoints are intentionally not included in this repository.
-- Users should download or prepare LSQ checkpoints themselves, based on their own license/access constraints.
-- This repository provides the integration and benchmarking pipeline, not pretrained model distribution.
+- reproducing an LSQ quantization baseline on ImageNet
+- integrating external training artifacts into a custom inference backend
+- implementing PyTorch C++/CUDA extensions for low-bit execution
+- using profiling to identify the dominant runtime bottlenecks
+- iterating on lowering and kernel design based on measured behavior
+- retaining unsuccessful directions when they help clarify the remaining gap to native execution
 
-## LSQ Integration Notes
+In that sense, the value of the project is not limited to the final numbers. It also captures the engineering process required to move from a quantized model to a more hardware-aware execution path.
 
-- LSQ training is not implemented in this repository yet.
-- Current integration reuses trained LSQ checkpoint weights/scales and converts selected `QuantLinear` layers.
-- Default conversion targets signed INT4 weight layers (`qn=-8`, `qp=7`).
+## References in This Repo
 
-## Common Issues
-
-1. `The detected CUDA version mismatches the version that was used to compile PyTorch`
-- Use CUDA 12.1 toolkit with torch 2.2.2 cu121.
-
-2. `unsupported GNU version` from nvcc
-- Use `gcc-12/g++-12` and pass `CC/CXX/CUDAHOSTCXX` explicitly.
-
-3. `ImportError: libc10.so: cannot open shared object file`
-- Import `torch` before extension import, or ensure torch shared libraries are visible in your environment.
-
-4. `Module 'fc' was not converted`
-- The target layer may not be 4-bit (for example first/last layer kept at 8-bit).
-- Try `--disable-first-last-8bit` or choose a 4-bit `QuantLinear` layer.
-
-## Roadmap
-
-- [x] Hardware-aware INT4/INT8 inference path and validation
-- [x] LSQ checkpoint adapter for layer conversion and benchmarking
-- [ ] Training-time optimization integrated into the same LSQ low-bit pipeline
+- Main report: [`docs/reports/report_lsq_cuda_cn.pdf`](/home/yph3738/projects/cuda_optimization/docs/reports/report_lsq_cuda_cn.pdf)
+- Supporting report source: [`docs/reports/report_lsq_cuda_cn.tex`](/home/yph3738/projects/cuda_optimization/docs/reports/report_lsq_cuda_cn.tex)
+- Example retained converted evaluation: [`artifacts/evals/results_lsq4_fusedconv_v1.txt`](/home/yph3738/projects/cuda_optimization/artifacts/evals/results_lsq4_fusedconv_v1.txt)
+- Example retained converted profile: [`artifacts/profiles/profile_lsq4_fusedconv_v2.txt`](/home/yph3738/projects/cuda_optimization/artifacts/profiles/profile_lsq4_fusedconv_v2.txt)

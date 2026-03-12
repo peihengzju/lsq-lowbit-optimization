@@ -1,0 +1,153 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.8em}
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+
+\title{\textbf{From LSQ Reproduction to CUDA-Oriented Low-Bit Inference Optimization}}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Project Context}
+This project started as a reproduction of LSQ quantization-aware training on ImageNet. The original goal was to verify that a low-bit LSQ model could be trained with acceptable accuracy degradation relative to the full-precision baseline. After the reproduction was completed, the project direction was extended toward systems optimization: rather than stopping at algorithmic correctness, the objective became understanding why low-bit models do not automatically translate into faster execution on GPUs, and how much of that gap can be closed with custom CUDA kernels.
+
+\section{Current Objective}
+The current objective is not simply to produce a more accurate quantized model. Instead, the goal is to establish an end-to-end path from LSQ training artifacts to a hardware-aware low-bit inference implementation, and then to iteratively improve that implementation using profiling-driven systems work. Concretely, the project now targets three questions:
+\begin{enumerate}
+  \item Can an LSQ checkpoint be integrated into a custom INT4-storage / INT8-compute inference path without losing model accuracy?
+  \item What are the actual runtime bottlenecks once the model is moved from algorithm-level quantization to a custom CUDA backend?
+  \item Which targeted kernel and lowering optimizations measurably reduce the execution gap to native inference?
+\end{enumerate}
+
+\section{Baseline Status Before the Latest Round}
+Before the most recent optimization round, the project had already established the following:
+\begin{itemize}
+  \item LSQ W4A4 training on ImageNet was successfully reproduced.
+  \item The reproduced LSQ model achieved approximately one percentage point lower Top-1 accuracy than the full-precision baseline, which is consistent with a credible LSQ reproduction.
+  \item A custom CUDA inference path had been integrated for the middle quantized layers of the network.
+  \item Full-model evaluation showed that the converted model preserved accuracy, but the early converted implementation was significantly slower than the native LSQ path due to \texttt{F.unfold}, temporary tensor allocation, dtype conversion, and fragmented kernel launches.
+\end{itemize}
+
+\section{Useful Modifications Since the Previous Report}
+Only retained modifications are listed in this section. The later \texttt{full-cover} attempt that converted \texttt{conv1} and \texttt{fc} was evaluated and then rolled back because it increased end-to-end runtime. It is therefore excluded from the retained optimization record.
+
+\subsection{1. Fixed-Batch Profiling Pipeline}
+A fixed-batch profiling workflow was added so that model forward execution could be measured without significant DataLoader noise. This was important because the earlier profile mixed model execution with input pipeline overhead, which made bottleneck attribution less reliable.
+
+\subsection{2. Specialized INT4/INT8 Convolution Paths}
+The original converted implementation relied heavily on explicit lowering from Python, especially \texttt{F.unfold}. The retained optimization path introduced specialized CUDA handling for the dominant convolution cases:
+\begin{itemize}
+  \item a fused quantize+lowering path for \texttt{3x3, stride=1, padding=1} convolutions;
+  \item a more integrated fused \texttt{3x3} convolution path that reduced Python-side post-processing;
+  \item a dedicated \texttt{1x1} path to avoid unnecessary generic lowering overhead.
+\end{itemize}
+
+\subsection{3. Reduced Host-Side Synchronization}
+Host synchronization caused by repeated \texttt{.item()} extraction from scale tensors was removed. The scales are now cached on the host side where appropriate, which eliminates repeated GPU-to-CPU scalar synchronization in the forward path.
+
+\subsection{4. Further Lowering and Front-End Quantization Cleanup}
+Additional work was applied to reduce front-end quantization overhead:
+\begin{itemize}
+  \item padded-\texttt{K} generation for the specialized \texttt{3x3} lowering path was moved into CUDA;
+  \item the \texttt{linear} path was updated to use a fused CUDA implementation rather than Python-side quantization followed by GEMM;
+  \item the \texttt{1x1} path was also moved toward fused quantization and execution, reducing residual \texttt{div}, \texttt{round}, \texttt{clamp}, and \texttt{to} costs.
+\end{itemize}
+
+\section{Retained Experimental Results}
+\renewcommand{\arraystretch}{1.2}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.33\textwidth} >{\raggedleft\arraybackslash}p{0.18\textwidth} >{\raggedright\arraybackslash}p{0.39\textwidth}}
+\toprule
+Experiment & Result & Notes \\
+\midrule
+\endfirsthead
+\toprule
+Experiment & Result & Notes \\
+\midrule
+\endhead
+FP native full-model eval & Top-1 \texttt{69.78}, Top-5 \texttt{89.11}, Time \texttt{56.2s} & Full-precision reference in the native path \\
+LSQ native full-model eval & Top-1 \texttt{68.69}, Top-5 \texttt{88.30}, Time \texttt{58.4s} & Native LSQ inference path \\
+Early converted full-model eval & Top-1 \texttt{68.75}, Top-5 \texttt{88.38}, Time \texttt{148.5s} & Initial converted path before the retained kernel work \\
+Retained converted full-model eval & Top-1 \texttt{68.76}, Top-5 \texttt{88.38}, Time \texttt{107.9s} & Best retained end-to-end converted result; 19 layers converted \\
+Converted layer coverage & \texttt{19} converted, \texttt{2} skipped & \texttt{conv1} and \texttt{fc} remain on the native path in the retained version \\
+Initial converted fixed-batch profile & Wall time \texttt{15.44s} & Baseline profiling reference for the converted path \\
+After fused \texttt{3x3} lowering & Wall time \texttt{9.62s} & Quantize+lowering moved into CUDA for the main \texttt{3x3} path \\
+After removing \texttt{.item()} and padding overhead & Wall time \texttt{8.46s} & Host synchronization and extra Python-side padding reduced \\
+After fused \texttt{3x3} convolution path & Wall time \texttt{8.22s} & More of the \texttt{3x3} post-processing moved off the Python side \\
+Current retained converted profile (\texttt{fusedconv\_v2}) & Wall time \texttt{8.15s} & Includes additional cleanup for \texttt{1x1} and \texttt{linear} front-end quantization \\
+\bottomrule
+\end{longtable}
+
+\section{Interpretation}
+Several points are now clear.
+
+First, the LSQ reproduction itself is not the bottleneck. Accuracy is stable across the retained converted path:
+\begin{itemize}
+  \item native LSQ: \texttt{68.69 / 88.30}
+  \item retained converted LSQ: \texttt{68.76 / 88.38}
+\end{itemize}
+This indicates that the custom backend preserves model behavior to a very good approximation.
+
+Second, the major performance gap is not caused by quantization theory, but by execution strategy. The early converted implementation was much slower because it depended on explicit lowering, temporary tensors, dtype conversions, and fragmented launches. Profiling consistently pointed to these issues rather than to LSQ itself.
+
+Third, the retained CUDA work is effective even though it does not yet outperform native inference. The converted fixed-batch profile was reduced from \texttt{15.44s} to \texttt{8.15s}. Full-model converted evaluation also improved substantially, from \texttt{148.5s} to \texttt{107.9s}. This is a meaningful reduction, even though the result is still slower than both FP native and LSQ native execution.
+
+Fourth, the project now demonstrates a complete systems narrative:
+\begin{itemize}
+  \item reproduce LSQ training;
+  \item integrate LSQ checkpoints into a custom low-bit backend;
+  \item validate full-model accuracy preservation;
+  \item profile the converted path to identify true bottlenecks;
+  \item optimize the dominant convolution and front-end quantization paths with custom CUDA work.
+\end{itemize}
+
+\section{Current Limitations}
+The retained implementation still has several important limitations:
+\begin{itemize}
+  \item the best-performing retained version converts only the middle 19 quantized layers, while \texttt{conv1} and \texttt{fc} remain on the native path;
+  \item the converted path still incurs substantial kernel launch overhead;
+  \item \texttt{div}, \texttt{round}, and \texttt{clamp} are reduced but not eliminated;
+  \item the current implementation is still closer to specialized lowering plus custom GEMM than to a production-quality fused convolution backend;
+  \item end-to-end inference is still slower than native cuDNN-based execution.
+\end{itemize}
+
+\section{Why the Full-Cover Version Is Excluded}
+An additional experiment was conducted after the retained optimization path to convert all 21 quantized layers, including \texttt{conv1} and \texttt{fc}. Although that version removed mixed execution, it increased both profiling wall time and end-to-end evaluation time. Because it regressed the retained performance trajectory and does not represent the current preferred implementation, it is intentionally excluded from the main report.
+
+\section{Next Technical Directions}
+The next useful steps are now clearer and more focused:
+\begin{enumerate}
+  \item continue reducing fragmented launches and residual front-end quantization overhead;
+  \item further specialize the dominant convolution paths rather than broadening weak coverage;
+  \item move from explicit lowering toward more implicit-GEMM-like or more deeply fused convolution execution;
+  \item explore a cleaner block-level integer activation interface if cross-layer integer execution is pursued in a future stage.
+\end{enumerate}
+
+\section{Conclusion}
+The current state of the project is no longer just an LSQ reproduction. It is a profiling-driven low-bit systems prototype built on top of a verified LSQ training baseline. The retained CUDA optimization path does not yet beat native inference, but it does accomplish three important outcomes:
+\begin{itemize}
+  \item it preserves full-model accuracy after conversion;
+  \item it demonstrates that the main runtime gap comes from execution structure, not from the LSQ algorithm itself;
+  \item it shows a clear optimization trajectory, reducing the converted fixed-batch profile from \texttt{15.44s} to \texttt{8.15s} and the converted full-model evaluation time from \texttt{148.5s} to \texttt{107.9s}.
+\end{itemize}
+
+This is a credible and technically defensible result for a systems-oriented follow-up to an LSQ reproduction project.
+
+\end{document}

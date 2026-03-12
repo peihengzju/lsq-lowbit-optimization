@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from quant_pipeline.ops.int4_int8_gemm import int4_int8_gemm
+from quant_pipeline.ops.int4_int8_gemm import linear_int4_int8
 from quant_pipeline.quantization.int4_pack import pack_int4_weights
 
 
@@ -21,6 +21,8 @@ class Int4WeightInt8ActLinear(nn.Module):
         out_features: int,
         w_scale: float,
         a_scale: float,
+        a_qn: int = -127,
+        a_qp: int = 127,
         out_dtype: torch.dtype = torch.float16,
         bias: bool = False,
     ):
@@ -31,9 +33,18 @@ class Int4WeightInt8ActLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
+        self.a_qn = int(a_qn)
+        self.a_qp = int(a_qp)
+        self.a_scale_host = float(a_scale)
+        self.w_scale_host = float(w_scale)
 
-        self.register_buffer("w_scale", torch.tensor(float(w_scale), dtype=torch.float32))
-        self.register_buffer("a_scale", torch.tensor(float(a_scale), dtype=torch.float32))
+        if self.a_qn < -128 or self.a_qp > 127:
+            raise ValueError(
+                f"Activation quantization range [{self.a_qn}, {self.a_qp}] does not fit int8 compute"
+            )
+
+        self.register_buffer("w_scale", torch.tensor(self.w_scale_host, dtype=torch.float32))
+        self.register_buffer("a_scale", torch.tensor(self.a_scale_host, dtype=torch.float32))
 
         self.register_buffer(
             "weight_packed",
@@ -65,13 +76,13 @@ class Int4WeightInt8ActLinear(nn.Module):
                 f"Input in_features mismatch: expected {self.in_features}, got {x.shape[1]}"
             )
 
-        # Symmetric per-tensor activation quantization.
-        x_int8 = torch.clamp(torch.round(x / self.a_scale), -127, 127).to(torch.int8)
-
-        acc_int32 = int4_int8_gemm(x_int8.contiguous(), self.weight_packed.contiguous())
-        y = acc_int32.to(torch.float32) * (self.a_scale * self.w_scale)
-
-        if self.bias is not None:
-            y = y + self.bias
-
-        return y.to(self.out_dtype)
+        return linear_int4_int8(
+            x.contiguous().to(torch.float32),
+            self.weight_packed.contiguous(),
+            self.a_scale_host,
+            self.w_scale_host,
+            self.a_qn,
+            self.a_qp,
+            self.bias,
+            self.out_dtype,
+        )
