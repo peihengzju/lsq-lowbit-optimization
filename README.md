@@ -2,7 +2,10 @@
 
 Profiling-driven low-bit inference project built with PyTorch C++/CUDA extensions.
 
-This repository is built on top of an LSQ ImageNet reproduction repository:
+## Training repository
+
+This project builds on an LSQ ImageNet reproduction repository:
+
 https://github.com/peihengzju/LSQ-ImageNet-Reproduction
 
 ## TL;DR
