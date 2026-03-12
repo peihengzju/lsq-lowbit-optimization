@@ -43,19 +43,19 @@ The converted path preserves full-model accuracy and materially improves over th
 
 ## Repository Structure
 
-- [`csrc/int4_int8_kernels.cu`](/home/yph3738/projects/cuda_optimization/csrc/int4_int8_kernels.cu): CUDA kernels
-- [`csrc/int4_int8_ext.cpp`](/home/yph3738/projects/cuda_optimization/csrc/int4_int8_ext.cpp): PyTorch extension bindings
-- [`quant_pipeline/ops/int4_int8_gemm.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_int8_gemm.py): Python wrappers for custom CUDA ops
-- [`quant_pipeline/ops/int4_conv2d.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_conv2d.py): custom low-bit convolution module
-- [`quant_pipeline/ops/int4_linear.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/ops/int4_linear.py): custom low-bit linear module
-- [`quant_pipeline/integration/lsq_adapter.py`](/home/yph3738/projects/cuda_optimization/quant_pipeline/integration/lsq_adapter.py): LSQ checkpoint import and conversion utilities
-- [`benchmarks/benchmark_inference.py`](/home/yph3738/projects/cuda_optimization/benchmarks/benchmark_inference.py): synthetic GEMM benchmark
-- [`benchmarks/benchmark_lsq_fc.py`](/home/yph3738/projects/cuda_optimization/benchmarks/benchmark_lsq_fc.py): LSQ layer benchmark
-- [`scripts/eval_lsq_imagenet.py`](/home/yph3738/projects/cuda_optimization/scripts/eval_lsq_imagenet.py): full-model ImageNet evaluation
-- [`scripts/profile_lsq_inference.py`](/home/yph3738/projects/cuda_optimization/scripts/profile_lsq_inference.py): fixed-batch inference profiling
-- [`artifacts/evals/`](/home/yph3738/projects/cuda_optimization/artifacts/evals): saved evaluation outputs
-- [`artifacts/profiles/`](/home/yph3738/projects/cuda_optimization/artifacts/profiles): saved profiling outputs
-- [`docs/reports/`](/home/yph3738/projects/cuda_optimization/docs/reports): report sources and generated PDFs
+- [`csrc/int4_int8_kernels.cu`](csrc/int4_int8_kernels.cu): CUDA kernels
+- [`csrc/int4_int8_ext.cpp`](csrc/int4_int8_ext.cpp): PyTorch extension bindings
+- [`quant_pipeline/ops/int4_int8_gemm.py`](quant_pipeline/ops/int4_int8_gemm.py): Python wrappers for custom CUDA ops
+- [`quant_pipeline/ops/int4_conv2d.py`](quant_pipeline/ops/int4_conv2d.py): custom low-bit convolution module
+- [`quant_pipeline/ops/int4_linear.py`](quant_pipeline/ops/int4_linear.py): custom low-bit linear module
+- [`quant_pipeline/integration/lsq_adapter.py`](quant_pipeline/integration/lsq_adapter.py): LSQ checkpoint import and conversion utilities
+- [`benchmarks/benchmark_inference.py`](benchmarks/benchmark_inference.py): synthetic GEMM benchmark
+- [`benchmarks/benchmark_lsq_fc.py`](benchmarks/benchmark_lsq_fc.py): LSQ layer benchmark
+- [`scripts/eval_lsq_imagenet.py`](scripts/eval_lsq_imagenet.py): full-model ImageNet evaluation
+- [`scripts/profile_lsq_inference.py`](scripts/profile_lsq_inference.py): fixed-batch inference profiling
+- [`artifacts/evals/`](artifacts/evals/): saved evaluation outputs
+- [`artifacts/profiles/`](artifacts/profiles/): saved profiling outputs
+- [`docs/reports/`](docs/reports/): report sources and generated PDFs
 
 ## Environment
 
@@ -151,3 +151,7 @@ python benchmarks/benchmark_lsq_fc.py \
 - residual front-end quantization work still exists
 - the current convolution backend is specialized but not yet equivalent to a mature implicit-GEMM or production fused-convolution implementation
 - profile-level memory traffic is still higher than native LSQ
+
+## License
+
+MIT License. See [`LICENSE`](LICENSE).
